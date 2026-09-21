@@ -1,0 +1,206 @@
+:root {
+  --bg: #0f1420;
+  --panel: #1a2233;
+  --panel-2: #212b40;
+  --border: #2e3a52;
+  --text: #e6ebf5;
+  --muted: #8b97ad;
+  --accent: #4f8cff;
+  --accent-hover: #3a75e8;
+  --danger: #e5534b;
+  --warn: #d29922;
+  --ok: #3fb950;
+  font-size: 15px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header {
+  padding: 1.5rem 2rem 0.5rem;
+}
+
+h1 { margin: 0 0 0.3rem; font-size: 1.5rem; }
+h2 { margin: 0; font-size: 1.1rem; }
+
+.subtitle { color: var(--muted); margin: 0 0 0.5rem; }
+
+main { padding: 1rem 2rem 3rem; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.2rem;
+  margin-bottom: 1.5rem;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.hidden { display: none !important; }
+
+.btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.9rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--text);
+  background: var(--panel-2);
+  transition: background 0.15s;
+}
+.btn:hover { filter: brightness(1.15); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-secondary { background: var(--panel-2); }
+.btn-danger { background: transparent; border-color: var(--danger); color: var(--danger); }
+.btn-lg { padding: 0.6rem 1.6rem; font-size: 1rem; }
+
+.device {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.device-header {
+  display: flex;
+  gap: 0.6rem;
+  margin-bottom: 0.7rem;
+}
+
+.device-name {
+  flex: 1;
+  font-weight: 600;
+}
+
+.field { display: block; margin-bottom: 0.7rem; }
+.field > span {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-bottom: 0.3rem;
+}
+.field code { color: var(--warn); }
+
+input[type="text"], textarea {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 0.5rem 0.6rem;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+}
+textarea { resize: vertical; }
+input:focus, textarea:focus { outline: 1px solid var(--accent); }
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.status { color: var(--muted); }
+.status.error { color: var(--danger); }
+.status.ok { color: var(--ok); }
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.summary {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.8rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.summary strong { color: var(--text); }
+.summary .warn { color: var(--warn); }
+
+.errors {
+  background: rgba(229, 83, 75, 0.12);
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  padding: 0.7rem 1rem;
+  margin-bottom: 0.8rem;
+  font-size: 0.85rem;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.errors div { margin: 0.15rem 0; }
+
+.table-wrap { overflow-x: auto; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+
+td.mono, th.mono { font-family: Consolas, monospace; }
+
+td.event-cell {
+  white-space: normal;
+  max-width: 480px;
+  font-family: Consolas, monospace;
+  font-size: 0.78rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+tr.extrapolated td { background: rgba(210, 153, 34, 0.07); }
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+}
+.badge-warn { background: rgba(210, 153, 34, 0.2); color: var(--warn); }
+.badge-ok { background: rgba(63, 185, 80, 0.15); color: var(--ok); }
+
+body.compact .col-raw { display: none; }
+
+@media (max-width: 720px) {
+  main, header { padding-left: 1rem; padding-right: 1rem; }
+}

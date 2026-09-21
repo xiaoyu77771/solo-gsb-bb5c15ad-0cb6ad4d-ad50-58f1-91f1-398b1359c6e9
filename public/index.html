@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>多设备事件对时工具</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>🕐 多设备事件对时工具</h1>
+    <p class="subtitle">粘贴多台设备的 JSONL 事件流，按“本地时间 → 基准时间”锚点分段线性校时，合并为统一时间线</p>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="panel-header">
+        <h2>设备列表</h2>
+        <div>
+          <button id="btn-sample" class="btn btn-secondary" type="button">载入示例</button>
+          <button id="btn-add-device" class="btn btn-primary" type="button">+ 添加设备</button>
+        </div>
+      </div>
+      <div id="devices"></div>
+      <div class="actions">
+        <button id="btn-sync" class="btn btn-primary btn-lg" type="button">校时并合并</button>
+        <span id="status" class="status"></span>
+      </div>
+    </section>
+
+    <section id="result-panel" class="panel hidden">
+      <div class="panel-header">
+        <h2>统一时间线</h2>
+        <div class="toolbar">
+          <label class="toggle">
+            <input type="checkbox" id="chk-hide-extrapolated" />
+            隐藏外推事件
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="chk-compact" />
+            紧凑模式（仅校正时间）
+          </label>
+          <button id="btn-export" class="btn btn-secondary" type="button">导出合并 JSONL</button>
+        </div>
+      </div>
+      <div id="summary" class="summary"></div>
+      <div id="errors" class="errors hidden"></div>
+      <div class="table-wrap">
+        <table id="timeline">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>设备</th>
+              <th class="col-raw">原始时间（设备本地）</th>
+              <th>校正时间（基准）</th>
+              <th>外推</th>
+              <th>事件内容</th>
+            </tr>
+          </thead>
+          <tbody id="timeline-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <template id="tpl-device">
+    <div class="device">
+      <div class="device-header">
+        <input class="device-name" type="text" placeholder="设备名称，如 switch-A" />
+        <button class="btn btn-danger btn-remove" type="button" title="删除该设备">✕</button>
+      </div>
+      <label class="field">
+        <span>时间字段名（留空自动探测 ts / time / timestamp）</span>
+        <input class="device-timefield" type="text" placeholder="ts" />
+      </label>
+      <label class="field">
+        <span>同步锚点（每行一条：<code>本地时间, 基准时间</code>，支持 ISO 字符串或 epoch 毫秒）</span>
+        <textarea class="device-anchors" rows="3" spellcheck="false"
+          placeholder="2026-09-21T10:00:00.000Z, 2026-09-21T10:00:02.500Z&#10;2026-09-21T10:10:00.000Z, 2026-09-21T10:10:02.000Z"></textarea>
+      </label>
+      <label class="field">
+        <span>事件流（JSONL，每行一个 JSON 对象）</span>
+        <textarea class="device-events" rows="6" spellcheck="false"
+          placeholder='{"ts":"2026-09-21T10:00:01Z","level":"ERROR","msg":"link down"}'></textarea>
+      </label>
+    </div>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
