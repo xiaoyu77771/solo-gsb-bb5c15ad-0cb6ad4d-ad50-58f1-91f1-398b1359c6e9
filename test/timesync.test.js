@@ -91,9 +91,9 @@ test('分段线性校时：区间外按最近段斜率外推并标记', () => {
 
 test('单锚点做平移，非锚点位置标记为外推', () => {
   const anchors = normalizeAnchors([{ local: 1000, ref: 5000 }]);
-  assert.deepEqual(correctTime(1000, anchors), { corrected: 5000, extrapolated: null });
-  assert.deepEqual(correctTime(2000, anchors), { corrected: 6000, extrapolated: 'after' });
-  assert.deepEqual(correctTime(0, anchors), { corrected: 4000, extrapolated: 'before' });
+  assert.deepEqual(correctTime(1000, anchors), { corrected: 5000, uncertainty: 0, extrapolated: null });
+  assert.deepEqual(correctTime(2000, anchors), { corrected: 6000, uncertainty: 0, extrapolated: 'after' });
+  assert.deepEqual(correctTime(0, anchors), { corrected: 4000, uncertainty: 0, extrapolated: 'before' });
 });
 
 test('多段锚点使用各自区间的斜率', () => {
@@ -186,4 +186,165 @@ test('toJsonl 输出每行一个可解析的 JSON', () => {
   assert.equal(obj.correctedTimeMs, 0);
   assert.equal(obj.extrapolated, null);
   assert.deepEqual(obj.event, { ts: 0, msg: 'x' });
+});
+
+/* ---------- 时间不确定性：锚点 ±误差、校正区间与顺序不确定 ---------- */
+
+test('normalizeAnchors 解析可选 ±误差，缺省按 0 处理', () => {
+  const anchors = normalizeAnchors([
+    { local: 0, ref: 0 },
+    { local: 1000, ref: 1000, err: 50 },
+    { local: 2000, ref: 2000, err: '75.5' },
+    { local: 3000, ref: 3000, err: '±100' },
+  ]);
+  assert.deepEqual(anchors.map((a) => a.err), [0, 50, 75.5, 100]);
+});
+
+test('normalizeAnchors 拒绝负数或非数字误差并定位锚点序号', () => {
+  assert.throws(
+    () => normalizeAnchors([
+      { local: 0, ref: 0 },
+      { local: 1000, ref: 1000, err: -5 },
+    ]),
+    /第 2 个锚点的误差无效/
+  );
+  assert.throws(
+    () => normalizeAnchors([
+      { local: 0, ref: 0, err: 'abc' },
+    ]),
+    /第 1 个锚点的误差无效/
+  );
+  assert.throws(
+    () => normalizeAnchors([{ local: 0, ref: 0, err: '-3' }]),
+    /第 1 个锚点的误差无效/
+  );
+});
+
+test('区间内不确定度按锚点误差线性插值', () => {
+  const anchors = normalizeAnchors([
+    { local: 0, ref: 0, err: 100 },
+    { local: 10000, ref: 10000, err: 300 },
+  ]);
+  // 中点：误差 = (100 + 300) / 2 = 200
+  const mid = correctTime(5000, anchors);
+  assert.equal(mid.corrected, 5000);
+  assert.equal(mid.uncertainty, 200);
+  assert.equal(mid.extrapolated, null);
+  // 锚点上不确定度等于该锚点误差
+  assert.equal(correctTime(0, anchors).uncertainty, 100);
+  assert.equal(correctTime(10000, anchors).uncertainty, 300);
+});
+
+test('外推时不确定度按区间算术随距离放大', () => {
+  const anchors = normalizeAnchors([
+    { local: 0, ref: 0, err: 100 },
+    { local: 10000, ref: 10000, err: 300 },
+  ]);
+  // 首锚点之前半个段长：ratio = -0.5 -> |1.5|*100 + 0.5*300 = 300
+  const before = correctTime(-5000, anchors);
+  assert.equal(before.uncertainty, 300);
+  assert.equal(before.extrapolated, 'before');
+  // 末锚点之后一个段长：ratio = 2 -> 1*100 + 2*300 = 700
+  const after = correctTime(20000, anchors);
+  assert.equal(after.uncertainty, 700);
+  assert.equal(after.extrapolated, 'after');
+});
+
+test('单锚点平移时不确定度保持不变', () => {
+  const anchors = normalizeAnchors([{ local: 1000, ref: 5000, err: 250 }]);
+  assert.equal(correctTime(1000, anchors).uncertainty, 250);
+  assert.equal(correctTime(999999, anchors).uncertainty, 250);
+});
+
+test('correctDevice 输出校正区间（最早/最晚 = 中心值 ± 不确定半宽）', () => {
+  const merged = mergeTimeline([
+    {
+      name: 'dev',
+      anchors: [{ local: 0, ref: 0, err: 100 }, { local: 10000, ref: 10000, err: 100 }],
+      events: [{ ts: 5000 }],
+    },
+  ]);
+  const e = merged.timeline[0];
+  assert.equal(e.correctedTime, 5000);
+  assert.equal(e.uncertaintyMs, 100);
+  assert.equal(e.correctedEarliest, 4900);
+  assert.equal(e.correctedLatest, 5100);
+  assert.equal(e.orderUncertain, false);
+});
+
+test('未填写误差按 0 处理：区间退化为点', () => {
+  const merged = mergeTimeline([
+    { name: 'dev', anchors: [{ local: 0, ref: 0 }, { local: 10000, ref: 10000 }], events: [{ ts: 5000 }] },
+  ]);
+  const e = merged.timeline[0];
+  assert.equal(e.uncertaintyMs, 0);
+  assert.equal(e.correctedEarliest, e.correctedTime);
+  assert.equal(e.correctedLatest, e.correctedTime);
+});
+
+test('相邻事件校正区间相交时两侧都标记为顺序不确定', () => {
+  const merged = mergeTimeline([
+    {
+      name: 'dev-A',
+      anchors: [{ local: 0, ref: 0, err: 1000 }, { local: 10000, ref: 10000, err: 1000 }],
+      events: [{ ts: 5000, msg: 'a' }], // 中心 5000，区间 [4000, 6000]
+    },
+    {
+      name: 'dev-B',
+      anchors: [{ local: 0, ref: 5500, err: 1000 }, { local: 10000, ref: 15500, err: 1000 }],
+      events: [{ ts: 0, msg: 'b' }], // 中心 5500，区间 [4500, 6500]，与 a 相交
+    },
+  ]);
+  assert.equal(merged.eventCount, 2);
+  assert.equal(merged.orderUncertainCount, 2);
+  assert.deepEqual(merged.timeline.map((e) => e.orderUncertain), [true, true]);
+  // 排序仍按中心值
+  assert.deepEqual(merged.timeline.map((e) => e.correctedTime), [5000, 5500]);
+});
+
+test('区间不相交的相邻事件不标记顺序不确定', () => {
+  const merged = mergeTimeline([
+    {
+      name: 'dev-A',
+      anchors: [{ local: 0, ref: 0, err: 100 }, { local: 10000, ref: 10000, err: 100 }],
+      events: [{ ts: 1000, msg: 'a' }], // 区间 [900, 1100]
+    },
+    {
+      name: 'dev-B',
+      anchors: [{ local: 0, ref: 5000, err: 100 }, { local: 10000, ref: 15000, err: 100 }],
+      events: [{ ts: 0, msg: 'b' }], // 区间 [4900, 5100]
+    },
+  ]);
+  assert.equal(merged.orderUncertainCount, 0);
+  assert.deepEqual(merged.timeline.map((e) => e.orderUncertain), [false, false]);
+});
+
+test('顺序不确定标记沿相邻链传播（1-2 与 2-3 相交 -> 三条都标记）', () => {
+  const mk = (name, offset) => ({
+    name,
+    anchors: [{ local: 0, ref: offset, err: 600 }, { local: 10000, ref: offset + 10000, err: 600 }],
+    events: [{ ts: 0 }],
+  });
+  // 中心值 0 / 1000 / 2000，半宽 600：相邻两两相交，1 与 3 不相交
+  const merged = mergeTimeline([mk('a', 0), mk('b', 1000), mk('c', 2000)]);
+  assert.equal(merged.orderUncertainCount, 3);
+  assert.deepEqual(merged.timeline.map((e) => e.orderUncertain), [true, true, true]);
+});
+
+test('toJsonl 包含校正区间与顺序不确定标记', () => {
+  const merged = mergeTimeline([
+    {
+      name: 'dev',
+      anchors: [{ local: 0, ref: 0, err: 500 }, { local: 10000, ref: 10000, err: 500 }],
+      events: [{ ts: 2000, msg: 'x' }],
+    },
+  ]);
+  const obj = JSON.parse(toJsonl(merged).split('\n')[0]);
+  assert.equal(obj.correctedTimeMs, 2000);
+  assert.equal(obj.correctedEarliestMs, 1500);
+  assert.equal(obj.correctedLatestMs, 2500);
+  assert.equal(obj.uncertaintyMs, 500);
+  assert.equal(obj.orderUncertain, false);
+  assert.equal(obj.correctedEarliest, new Date(1500).toISOString());
+  assert.equal(obj.correctedLatest, new Date(2500).toISOString());
 });

@@ -56,7 +56,7 @@ app.post('/api/sync', (req, res) => {
   res.json(merged);
 });
 
-/** POST /api/parse-anchors：前端实时校验锚点文本（每行 "本地时间, 基准时间"）。 */
+/** POST /api/parse-anchors：前端实时校验锚点文本（每行 "本地时间, 基准时间[, ±误差毫秒]"）。 */
 app.post('/api/parse-anchors', (req, res) => {
   const text = (req.body && req.body.text) || '';
   const anchors = [];
@@ -67,11 +67,20 @@ app.post('/api/parse-anchors', (req, res) => {
       const trimmed = line.trim();
       if (trimmed === '' || trimmed.startsWith('#')) return;
       const parts = trimmed.split(/\s*(?:,|->|\t)\s*/);
-      if (parts.length !== 2) {
-        errors.push({ line: idx + 1, message: '格式应为：本地时间, 基准时间' });
+      if (parts.length < 2 || parts.length > 3) {
+        errors.push({ line: idx + 1, message: '格式应为：本地时间, 基准时间[, ±误差毫秒]' });
         return;
       }
-      anchors.push({ local: parts[0], ref: parts[1] });
+      const anchor = { local: parts[0], ref: parts[1] };
+      if (parts.length === 3) {
+        const errText = parts[2].replace(/^[±+]\s*/, '').trim();
+        if (!/^\d+(\.\d+)?$/.test(errText)) {
+          errors.push({ line: idx + 1, message: `误差须为非负毫秒数（得到 "${parts[2]}"）` });
+          return;
+        }
+        anchor.err = Number(errText);
+      }
+      anchors.push(anchor);
     });
   res.json({ anchors, errors });
 });

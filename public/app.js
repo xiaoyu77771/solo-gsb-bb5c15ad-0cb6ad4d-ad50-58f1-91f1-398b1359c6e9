@@ -10,6 +10,7 @@ const summaryEl = document.getElementById('summary');
 const errorsEl = document.getElementById('errors');
 const tbody = document.getElementById('timeline-body');
 const chkHideExtrapolated = document.getElementById('chk-hide-extrapolated');
+const chkOnlyUncertain = document.getElementById('chk-only-uncertain');
 const chkCompact = document.getElementById('chk-compact');
 
 let lastResult = null;
@@ -33,7 +34,7 @@ function setStatus(msg, cls) {
   statusEl.className = 'status' + (cls ? ' ' + cls : '');
 }
 
-/** 解析锚点文本：每行 "本地时间, 基准时间"（也支持 -> 或 Tab 分隔，# 开头为注释）。 */
+/** 解析锚点文本：每行 "本地时间, 基准时间[, ±误差毫秒]"（也支持 -> 或 Tab 分隔，# 开头为注释）。 */
 function parseAnchorLines(text) {
   const anchors = [];
   const errors = [];
@@ -41,11 +42,20 @@ function parseAnchorLines(text) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) return;
     const parts = trimmed.split(/\s*(?:,|->|\t)\s*/);
-    if (parts.length !== 2) {
-      errors.push({ line: idx + 1, message: '格式应为：本地时间, 基准时间' });
+    if (parts.length < 2 || parts.length > 3) {
+      errors.push({ line: idx + 1, message: '格式应为：本地时间, 基准时间[, ±误差毫秒]' });
       return;
     }
-    anchors.push({ local: parts[0], ref: parts[1] });
+    const anchor = { local: parts[0], ref: parts[1] };
+    if (parts.length === 3) {
+      const errText = parts[2].replace(/^[±+]\s*/, '').trim();
+      if (!/^\d+(\.\d+)?$/.test(errText)) {
+        errors.push({ line: idx + 1, message: `误差须为非负毫秒数（得到 "${parts[2]}"）` });
+        return;
+      }
+      anchor.err = Number(errText);
+    }
+    anchors.push(anchor);
   });
   return { anchors, errors };
 }
@@ -113,11 +123,12 @@ function renderResult(data) {
     ['设备数', data.deviceCount],
     ['事件总数', data.eventCount],
     ['外推事件', data.extrapolatedCount],
+    ['顺序不确定', data.orderUncertainCount],
     ['生成时间', new Date(data.generatedAt).toLocaleString()],
   ];
   for (const [label, value] of items) {
     const span = document.createElement('span');
-    const isWarn = label === '外推事件' && value > 0;
+    const isWarn = (label === '外推事件' || label === '顺序不确定') && value > 0;
     span.innerHTML = `${label}：<strong class="${isWarn ? 'warn' : ''}">${value}</strong>`;
     summaryEl.appendChild(span);
   }
@@ -140,27 +151,46 @@ function renderResult(data) {
 function renderTable() {
   if (!lastResult) return;
   const hideExtrapolated = chkHideExtrapolated.checked;
+  const onlyUncertain = chkOnlyUncertain.checked;
   tbody.innerHTML = '';
   let visible = 0;
   lastResult.timeline.forEach((entry) => {
     if (hideExtrapolated && entry.extrapolated) return;
+    if (onlyUncertain && !entry.orderUncertain) return;
     visible++;
     const tr = document.createElement('tr');
-    if (entry.extrapolated) tr.className = 'extrapolated';
+    if (entry.extrapolated) tr.classList.add('extrapolated');
+    if (entry.orderUncertain) tr.classList.add('uncertain');
 
-    const badge = entry.extrapolated
-      ? `<span class="badge badge-warn">${entry.extrapolated === 'before' ? '区间前' : '区间后'}</span>`
-      : '<span class="badge badge-ok">内插</span>';
+    const badges = [
+      entry.extrapolated
+        ? `<span class="badge badge-warn">${entry.extrapolated === 'before' ? '区间前' : '区间后'}</span>`
+        : '<span class="badge badge-ok">内插</span>',
+    ];
+    if (entry.orderUncertain) {
+      badges.push('<span class="badge badge-uncertain">顺序不确定</span>');
+    }
 
     tr.innerHTML =
       `<td class="mono">${visible}</td>` +
       `<td>${escapeHtml(entry.device)}</td>` +
       `<td class="mono col-raw">${escapeHtml(fmtIso(entry.rawTime))}</td>` +
       `<td class="mono">${escapeHtml(fmtIso(entry.correctedTime))}</td>` +
-      `<td>${badge}</td>` +
+      `<td class="range-cell">${renderRange(entry)}</td>` +
+      `<td>${badges.join(' ')}</td>` +
       `<td class="event-cell">${escapeHtml(JSON.stringify(entry.event))}</td>`;
     tbody.appendChild(tr);
   });
+}
+
+/** 渲染校正区间 [最早, 最晚]；误差为 0 时区间退化为点，仅显示 ±0。 */
+function renderRange(entry) {
+  if (!entry.uncertaintyMs) return '<span class="muted">±0 ms</span>';
+  return (
+    `<div>${escapeHtml(fmtIso(entry.correctedEarliest))}</div>` +
+    `<div>${escapeHtml(fmtIso(entry.correctedLatest))}</div>` +
+    `<div class="muted">±${entry.uncertaintyMs} ms</div>`
+  );
 }
 
 function exportJsonl() {
@@ -191,13 +221,13 @@ function loadSample() {
     name: 'switch-A',
     timeField: 'ts',
     anchors: [
-      '# 本地时间, 基准时间',
-      '2026-09-21T10:00:00.000Z, 2026-09-21T10:00:02.500Z',
-      '2026-09-21T10:10:00.000Z, 2026-09-21T10:10:02.000Z',
+      '# 本地时间, 基准时间, ±误差毫秒（可选）',
+      '2026-09-21T10:00:00.000Z, 2026-09-21T10:00:02.500Z, 1000',
+      '2026-09-21T10:10:00.000Z, 2026-09-21T10:10:02.000Z, 1000',
     ].join('\n'),
     events: [
       '{"ts":"2026-09-21T09:59:50.000Z","level":"INFO","msg":"boot"}',
-      '{"ts":"2026-09-21T10:00:01.000Z","level":"ERROR","msg":"port 3 link down"}',
+      '{"ts":"2026-09-21T10:00:05.000Z","level":"ERROR","msg":"port 3 link down"}',
       '{"ts":"2026-09-21T10:05:00.000Z","level":"WARN","msg":"crc errors rising"}',
       '{"ts":"2026-09-21T10:10:05.000Z","level":"INFO","msg":"snmp poll ok"}',
     ].join('\n'),
@@ -206,8 +236,8 @@ function loadSample() {
     name: 'server-B',
     timeField: '',
     anchors: [
-      '2026-09-21T10:00:10.000Z, 2026-09-21T10:00:05.000Z',
-      '2026-09-21T10:10:10.000Z, 2026-09-21T10:10:04.500Z',
+      '2026-09-21T10:00:10.000Z, 2026-09-21T10:00:05.000Z, 1000',
+      '2026-09-21T10:10:10.000Z, 2026-09-21T10:10:04.500Z, 1000',
     ].join('\n'),
     events: [
       '{"time":"2026-09-21T10:00:12.000Z","level":"INFO","msg":"nic flap detected"}',
@@ -215,7 +245,7 @@ function loadSample() {
       '{"time":"2026-09-21T10:10:20.000Z","level":"INFO","msg":"backup finished"}',
     ].join('\n'),
   });
-  setStatus('已载入示例，可直接点击“校时并合并”', 'ok');
+  setStatus('已载入示例（含 ±误差锚点，可演示“顺序不确定”标记），可直接点击“校时并合并”', 'ok');
 }
 
 document.getElementById('btn-add-device').addEventListener('click', () => addDevice());
@@ -223,6 +253,7 @@ document.getElementById('btn-sample').addEventListener('click', loadSample);
 document.getElementById('btn-sync').addEventListener('click', doSync);
 document.getElementById('btn-export').addEventListener('click', exportJsonl);
 chkHideExtrapolated.addEventListener('change', renderTable);
+chkOnlyUncertain.addEventListener('change', renderTable);
 chkCompact.addEventListener('change', () => {
   document.body.classList.toggle('compact', chkCompact.checked);
 });
