@@ -10,6 +10,7 @@ const summaryEl = document.getElementById('summary');
 const errorsEl = document.getElementById('errors');
 const tbody = document.getElementById('timeline-body');
 const chkHideExtrapolated = document.getElementById('chk-hide-extrapolated');
+const chkOnlyUncertain = document.getElementById('chk-only-uncertain');
 const chkCompact = document.getElementById('chk-compact');
 
 let lastResult = null;
@@ -33,7 +34,10 @@ function setStatus(msg, cls) {
   statusEl.className = 'status' + (cls ? ' ' + cls : '');
 }
 
-/** 解析锚点文本：每行 "本地时间, 基准时间"（也支持 -> 或 Tab 分隔，# 开头为注释）。 */
+/**
+ * 解析锚点文本：每行 "本地时间, 基准时间[, ±误差毫秒]"（也支持 -> 或 Tab 分隔，# 注释）。
+ * 第三列可选，空白按 0；负数或非数字定位到行并报错。
+ */
 function parseAnchorLines(text) {
   const anchors = [];
   const errors = [];
@@ -41,13 +45,31 @@ function parseAnchorLines(text) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) return;
     const parts = trimmed.split(/\s*(?:,|->|\t)\s*/);
-    if (parts.length !== 2) {
-      errors.push({ line: idx + 1, message: '格式应为：本地时间, 基准时间' });
+    if (parts.length < 2 || parts.length > 3) {
+      errors.push({ line: idx + 1, message: '格式应为：本地时间, 基准时间[, ±误差毫秒]' });
       return;
     }
-    anchors.push({ local: parts[0], ref: parts[1] });
+    const [local, ref, uncertaintyRaw] = parts;
+    const uncertaintyMs = parseUncertainty(uncertaintyRaw);
+    if (uncertaintyMs === null) {
+      errors.push({ line: idx + 1, message: `±误差毫秒无效（${uncertaintyRaw}）：必须是不小于 0 的数字` });
+      return;
+    }
+    anchors.push({ local, ref, uncertaintyMs });
   });
   return { anchors, errors };
+}
+
+/** 前端版误差列解析：空值→0，合法非负数→数字，负数/非数字→null（拒绝）。 */
+function parseUncertainty(raw) {
+  if (raw === undefined || raw === null) return 0;
+  let s = String(raw).trim();
+  if (s === '') return 0;
+  const negative = s.startsWith('-');
+  s = s.replace(/^[±+\-\s]+/, '').replace(/\s*(?:ms|毫秒)\s*$/i, '').trim();
+  const num = Number(s);
+  if (!Number.isFinite(num) || num < 0 || negative) return null;
+  return num;
 }
 
 function collectDevices() {
@@ -113,11 +135,13 @@ function renderResult(data) {
     ['设备数', data.deviceCount],
     ['事件总数', data.eventCount],
     ['外推事件', data.extrapolatedCount],
+    ['顺序不确定', data.orderUncertainCount || 0],
     ['生成时间', new Date(data.generatedAt).toLocaleString()],
   ];
   for (const [label, value] of items) {
     const span = document.createElement('span');
-    const isWarn = label === '外推事件' && value > 0;
+    const isWarn =
+      (label === '外推事件' && value > 0) || (label === '顺序不确定' && value > 0);
     span.innerHTML = `${label}：<strong class="${isWarn ? 'warn' : ''}">${value}</strong>`;
     summaryEl.appendChild(span);
   }
@@ -140,27 +164,53 @@ function renderResult(data) {
 function renderTable() {
   if (!lastResult) return;
   const hideExtrapolated = chkHideExtrapolated.checked;
+  const onlyUncertain = chkOnlyUncertain.checked;
   tbody.innerHTML = '';
   let visible = 0;
   lastResult.timeline.forEach((entry) => {
     if (hideExtrapolated && entry.extrapolated) return;
+    if (onlyUncertain && !entry.orderUncertain) return;
     visible++;
     const tr = document.createElement('tr');
-    if (entry.extrapolated) tr.className = 'extrapolated';
+    const classes = [];
+    if (entry.extrapolated) classes.push('extrapolated');
+    if (entry.orderUncertain) classes.push('order-uncertain');
+    tr.className = classes.join(' ');
 
     const badge = entry.extrapolated
       ? `<span class="badge badge-warn">${entry.extrapolated === 'before' ? '区间前' : '区间后'}</span>`
       : '<span class="badge badge-ok">内插</span>';
+
+    const orderBadge = entry.orderUncertain
+      ? '<span class="badge badge-uncertain" title="与相邻事件的校正区间相交，先后顺序无法确定">顺序不确定</span>'
+      : '<span class="badge badge-ok">确定</span>';
+
+    const rangeCell = entry.uncertaintyMs > 0
+      ? `<span class="range">${escapeHtml(fmtIso(entry.earliestTime))} → ${escapeHtml(fmtIso(entry.latestTime))}</span>` +
+        `<span class="range-ms">±${formatMs(entry.uncertaintyMs)}</span>`
+      : '<span class="range-zero">—</span>';
 
     tr.innerHTML =
       `<td class="mono">${visible}</td>` +
       `<td>${escapeHtml(entry.device)}</td>` +
       `<td class="mono col-raw">${escapeHtml(fmtIso(entry.rawTime))}</td>` +
       `<td class="mono">${escapeHtml(fmtIso(entry.correctedTime))}</td>` +
+      `<td class="mono col-range">${rangeCell}</td>` +
       `<td>${badge}</td>` +
+      `<td>${orderBadge}</td>` +
       `<td class="event-cell">${escapeHtml(JSON.stringify(entry.event))}</td>`;
     tbody.appendChild(tr);
   });
+  if (onlyUncertain && visible === 0) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="8" class="empty-hint">没有“顺序不确定”的事件</td>';
+    tbody.appendChild(tr);
+  }
+}
+
+/** 误差毫秒展示：原样保留有效数字，补 ms 单位。 */
+function formatMs(ms) {
+  return `${ms} ms`;
 }
 
 function exportJsonl() {
@@ -191,9 +241,9 @@ function loadSample() {
     name: 'switch-A',
     timeField: 'ts',
     anchors: [
-      '# 本地时间, 基准时间',
-      '2026-09-21T10:00:00.000Z, 2026-09-21T10:00:02.500Z',
-      '2026-09-21T10:10:00.000Z, 2026-09-21T10:10:02.000Z',
+      '# 本地时间, 基准时间, ±误差毫秒（第三列可选，缺省 0）',
+      '2026-09-21T10:00:00.000Z, 2026-09-21T10:00:02.500Z, 3000',
+      '2026-09-21T10:10:00.000Z, 2026-09-21T10:10:02.000Z, 3000',
     ].join('\n'),
     events: [
       '{"ts":"2026-09-21T09:59:50.000Z","level":"INFO","msg":"boot"}',
@@ -206,8 +256,8 @@ function loadSample() {
     name: 'server-B',
     timeField: '',
     anchors: [
-      '2026-09-21T10:00:10.000Z, 2026-09-21T10:00:05.000Z',
-      '2026-09-21T10:10:10.000Z, 2026-09-21T10:10:04.500Z',
+      '2026-09-21T10:00:10.000Z, 2026-09-21T10:00:05.000Z, 3000',
+      '2026-09-21T10:10:10.000Z, 2026-09-21T10:10:04.500Z, 3000',
     ].join('\n'),
     events: [
       '{"time":"2026-09-21T10:00:12.000Z","level":"INFO","msg":"nic flap detected"}',
@@ -223,6 +273,7 @@ document.getElementById('btn-sample').addEventListener('click', loadSample);
 document.getElementById('btn-sync').addEventListener('click', doSync);
 document.getElementById('btn-export').addEventListener('click', exportJsonl);
 chkHideExtrapolated.addEventListener('change', renderTable);
+chkOnlyUncertain.addEventListener('change', renderTable);
 chkCompact.addEventListener('change', () => {
   document.body.classList.toggle('compact', chkCompact.checked);
 });

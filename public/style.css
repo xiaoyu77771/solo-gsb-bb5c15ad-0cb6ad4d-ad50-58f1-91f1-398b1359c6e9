@@ -190,6 +190,15 @@ td.event-cell {
 
 tr.extrapolated td { background: rgba(210, 153, 34, 0.07); }
 
+tr.order-uncertain td { background: rgba(229, 83, 75, 0.10); }
+tr.order-uncertain.extrapolated td { background: rgba(229, 83, 75, 0.14); }
+
+.col-range .range { display: block; font-size: 0.75rem; color: var(--text); }
+.col-range .range-ms { display: block; font-size: 0.72rem; color: var(--warn); margin-top: 0.1rem; }
+.col-range .range-zero { color: var(--muted); }
+
+.empty-hint { text-align: center; color: var(--muted); padding: 1rem !important; }
+
 .badge {
   display: inline-block;
   padding: 0.1rem 0.5rem;
@@ -198,6 +207,7 @@ tr.extrapolated td { background: rgba(210, 153, 34, 0.07); }
 }
 .badge-warn { background: rgba(210, 153, 34, 0.2); color: var(--warn); }
 .badge-ok { background: rgba(63, 185, 80, 0.15); color: var(--ok); }
+.badge-uncertain { background: rgba(229, 83, 75, 0.2); color: var(--danger); }
 
 body.compact .col-raw { display: none; }
 

@@ -6,6 +6,7 @@ const {
   parseJsonl,
   mergeTimeline,
   toJsonl,
+  parseAnchorText,
   AUTO_TIME_FIELDS,
 } = require('./lib/timesync');
 
@@ -56,23 +57,10 @@ app.post('/api/sync', (req, res) => {
   res.json(merged);
 });
 
-/** POST /api/parse-anchors：前端实时校验锚点文本（每行 "本地时间, 基准时间"）。 */
+/** POST /api/parse-anchors：前端实时校验锚点文本（每行 "本地时间, 基准时间[, ±误差毫秒]"）。 */
 app.post('/api/parse-anchors', (req, res) => {
   const text = (req.body && req.body.text) || '';
-  const anchors = [];
-  const errors = [];
-  String(text)
-    .split(/\r?\n/)
-    .forEach((line, idx) => {
-      const trimmed = line.trim();
-      if (trimmed === '' || trimmed.startsWith('#')) return;
-      const parts = trimmed.split(/\s*(?:,|->|\t)\s*/);
-      if (parts.length !== 2) {
-        errors.push({ line: idx + 1, message: '格式应为：本地时间, 基准时间' });
-        return;
-      }
-      anchors.push({ local: parts[0], ref: parts[1] });
-    });
+  const { anchors, errors } = parseAnchorText(text);
   res.json({ anchors, errors });
 });
 

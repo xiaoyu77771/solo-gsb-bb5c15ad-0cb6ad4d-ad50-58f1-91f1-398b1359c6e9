@@ -4,6 +4,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   parseTime,
+  parseUncertaintyMs,
+  parseAnchorText,
   normalizeAnchors,
   correctTime,
   mergeTimeline,
@@ -91,9 +93,184 @@ test('分段线性校时：区间外按最近段斜率外推并标记', () => {
 
 test('单锚点做平移，非锚点位置标记为外推', () => {
   const anchors = normalizeAnchors([{ local: 1000, ref: 5000 }]);
-  assert.deepEqual(correctTime(1000, anchors), { corrected: 5000, extrapolated: null });
-  assert.deepEqual(correctTime(2000, anchors), { corrected: 6000, extrapolated: 'after' });
-  assert.deepEqual(correctTime(0, anchors), { corrected: 4000, extrapolated: 'before' });
+  assert.deepEqual(correctTime(1000, anchors), {
+    corrected: 5000, earliest: 5000, latest: 5000, extrapolated: null,
+  });
+  assert.deepEqual(correctTime(2000, anchors), {
+    corrected: 6000, earliest: 6000, latest: 6000, extrapolated: 'after',
+  });
+  assert.deepEqual(correctTime(0, anchors), {
+    corrected: 4000, earliest: 4000, latest: 4000, extrapolated: 'before',
+  });
+});
+
+test('单锚点误差恒定平移，区间为 corrected±uncertainty', () => {
+  const anchors = normalizeAnchors([{ local: 1000, ref: 5000, uncertaintyMs: 20 }]);
+  const r = correctTime(2000, anchors);
+  assert.equal(r.corrected, 6000);
+  assert.equal(r.earliest, 5980);
+  assert.equal(r.latest, 6020);
+});
+
+test('未填写误差按 0 处理，区间退化为点', () => {
+  const anchors = normalizeAnchors([
+    { local: 0, ref: 0 },
+    { local: 10000, ref: 10000 },
+  ]);
+  const r = correctTime(5000, anchors);
+  assert.equal(r.earliest, r.corrected);
+  assert.equal(r.latest, r.corrected);
+});
+
+test('负数或非数字误差定位到锚点序号并拒绝', () => {
+  assert.throws(
+    () => normalizeAnchors([{ local: 0, ref: 0, uncertaintyMs: -1 }]),
+    /第 1 个锚点的 ±误差毫秒无效/
+  );
+  assert.throws(
+    () => normalizeAnchors([
+      { local: 0, ref: 0, uncertaintyMs: 5 },
+      { local: 1000, ref: 1000, uncertaintyMs: 'abc' },
+    ]),
+    /第 2 个锚点的 ±误差毫秒无效/
+  );
+  assert.throws(
+    () => normalizeAnchors([{ local: 0, ref: 0, uncertaintyMs: '-10' }]),
+    /±误差毫秒无效/
+  );
+});
+
+test('parseUncertaintyMs：空值为 0，接受 ± 前缀/ms 后缀，拒绝负数与非数字', () => {
+  assert.equal(parseUncertaintyMs(undefined), 0);
+  assert.equal(parseUncertaintyMs(''), 0);
+  assert.equal(parseUncertaintyMs('   '), 0);
+  assert.equal(parseUncertaintyMs(25.5), 25.5);
+  assert.equal(parseUncertaintyMs('100'), 100);
+  assert.equal(parseUncertaintyMs('± 50 ms'), 50);
+  assert.ok(Number.isNaN(parseUncertaintyMs(-5)));
+  assert.ok(Number.isNaN(parseUncertaintyMs('abc')));
+  assert.ok(Number.isNaN(parseUncertaintyMs('-10')));
+});
+
+test('插值区间按区间算术在线性过渡两端误差', () => {
+  const anchors = normalizeAnchors([
+    { local: 0, ref: 0, uncertaintyMs: 100 },
+    { local: 10000, ref: 10000, uncertaintyMs: 300 },
+  ]);
+  // 中点：中心 5000，误差 (100+300)/2 = 200
+  const mid = correctTime(5000, anchors);
+  assert.equal(mid.corrected, 5000);
+  assert.equal(mid.earliest, 4800);
+  assert.equal(mid.latest, 5200);
+  // 四分之一点：误差 0.75*100 + 0.25*300 = 150
+  const q1 = correctTime(2500, anchors);
+  assert.equal(q1.earliest, 2350);
+  assert.equal(q1.latest, 2650);
+  // 锚点本身：只取该锚点自己的误差
+  assert.deepEqual(
+    [correctTime(0, anchors).earliest, correctTime(0, anchors).latest],
+    [-100, 100]
+  );
+});
+
+test('外推区间按系数绝对值放大误差', () => {
+  const anchors = normalizeAnchors([
+    { local: 0, ref: 1000, uncertaintyMs: 100 },
+    { local: 10000, ref: 11000, uncertaintyMs: 100 },
+  ]);
+  // localMs=20000：ratio=2，中心 21000，误差 |1-2|*100 + 2*100 = 300
+  const after = correctTime(20000, anchors);
+  assert.equal(after.corrected, 21000);
+  assert.equal(after.earliest, 20700);
+  assert.equal(after.latest, 21300);
+  assert.equal(after.extrapolated, 'after');
+  // localMs=-5000：ratio=-0.5，中心 -4000，误差 1.5*100 + 0.5*100 = 200
+  const before = correctTime(-5000, anchors);
+  assert.equal(before.earliest, -4200);
+  assert.equal(before.latest, -3800);
+  assert.equal(before.extrapolated, 'before');
+});
+
+test('parseAnchorText 第三列可选：空白按 0，坏值定位到行', () => {
+  const text = [
+    '# 注释行',
+    '0, 1000',
+    '10000, 11000, 50',
+    '20000, 21000, ',
+    '30000, 31000, -5',
+    '40000, 41000, nope',
+    '50000, 51000, 9, 9',
+  ].join('\n');
+  const { anchors, errors } = parseAnchorText(text);
+  assert.equal(anchors.length, 3);
+  assert.deepEqual(
+    anchors.map((a) => a.uncertaintyMs),
+    [0, 50, 0]
+  );
+  assert.deepEqual(
+    errors.map((e) => e.line),
+    [5, 6, 7]
+  );
+});
+
+test('mergeTimeline 标记相邻区间相交事件为顺序不确定', () => {
+  const merged = mergeTimeline([
+    {
+      name: 'dev-A',
+      anchors: [{ local: 0, ref: 0, uncertaintyMs: 100 }],
+      events: [{ ts: 1000, msg: 'a1' }, { ts: 5000, msg: 'a2' }],
+    },
+    {
+      name: 'dev-B',
+      anchors: [{ local: 0, ref: 1050, uncertaintyMs: 100 }],
+      events: [{ ts: 0, msg: 'b1' }],
+    },
+  ]);
+  // 中心序：a1=1000, b1=1050（区间 [950,1150] 相交），a2=5000
+  assert.equal(merged.orderUncertainCount, 2);
+  assert.equal(merged.timeline[0].orderUncertain, true);
+  assert.equal(merged.timeline[1].orderUncertain, true);
+  assert.equal(merged.timeline[2].orderUncertain, false);
+});
+
+test('区间仅端点相切也算顺序不确定；误差为 0 且不重合则确定', () => {
+  // a1 零误差区间退化为点 1000；b1 区间 [1000,1200]，在端点 1000 相切
+  const merged = mergeTimeline([
+    {
+      name: 'dev-A',
+      anchors: [{ local: 0, ref: 0 }],
+      events: [{ ts: 1000, msg: 'a1' }],
+    },
+    {
+      name: 'dev-B',
+      anchors: [{ local: 0, ref: 1100, uncertaintyMs: 100 }],
+      events: [{ ts: 0, msg: 'b1' }],
+    },
+  ]);
+  assert.equal(merged.orderUncertainCount, 2);
+
+  // 零误差、中心不同 => 顺序确定
+  const exact = mergeTimeline([
+    { name: 'a', anchors: [{ local: 0, ref: 0 }], events: [{ ts: 1000 }] },
+    { name: 'b', anchors: [{ local: 0, ref: 2000 }], events: [{ ts: 0 }] },
+  ]);
+  assert.equal(exact.orderUncertainCount, 0);
+});
+
+test('toJsonl 包含校正区间与顺序不确定标记', () => {
+  const merged = mergeTimeline([
+    {
+      name: 'dev',
+      anchors: [{ local: 0, ref: 0, uncertaintyMs: 10 }],
+      events: [{ ts: 0, msg: 'x' }],
+    },
+  ]);
+  const obj = JSON.parse(toJsonl(merged).split('\n')[0]);
+  assert.equal(obj.earliestTimeMs, -10);
+  assert.equal(obj.latestTimeMs, 10);
+  assert.equal(obj.uncertaintyMs, 10);
+  assert.equal(obj.orderUncertain, false);
+  assert.equal(obj.earliestTime, new Date(-10).toISOString());
 });
 
 test('多段锚点使用各自区间的斜率', () => {
